@@ -31,7 +31,7 @@
 #define _GNU_SOURCE 1
 #endif
 
-#ifndef __EMSCRIPTEN__
+#ifndef __wasm__
 
 #include <fficonfig.h>
 #include <ffi.h>
@@ -1104,4 +1104,4 @@ ffi_tramp_is_present (__attribute__((unused)) void *ptr)
 #endif /* FFI_CLOSURES */
 
 #endif /* NetBSD with PROT_MPROTECT */
-#endif /* __EMSCRIPTEN__ */
+#endif /* __wasm__ */
