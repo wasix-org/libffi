@@ -42,13 +42,17 @@ typedef void (*ffi_fp)(void);
 
 typedef enum ffi_abi {
   FFI_FIRST_ABI = 0,
-  FFI_WASM32, // "raw", no structures, varargs, or closures (not implemented!)
+  // The basic C ABI for wasm32 as implemented by clang/LLVM
+  // https://github.com/WebAssembly/tool-conventions/blob/main/BasicCABI.md
+  FFI_WASM32, // varargs, and closures not implemented yet
   FFI_WASM32_EMSCRIPTEN, // structures, varargs, and split 64-bit params
-  FFI_WASM32_WASIX,
+  FFI_WASM64,
   FFI_LAST_ABI,
 #ifdef __EMSCRIPTEN__
   FFI_DEFAULT_ABI = FFI_WASM32_EMSCRIPTEN
-#else
+#elif __wasm64__
+  FFI_DEFAULT_ABI = FFI_WASM64
+#else // __wasm32__
   FFI_DEFAULT_ABI = FFI_WASM32
 #endif
 } ffi_abi;

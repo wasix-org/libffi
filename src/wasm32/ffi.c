@@ -25,7 +25,9 @@
    ----------------------------------------------------------------------- */
 
 #include <ffi.h>
+#include <stdbool.h>
 #include <ffi_common.h>
+#include <stdio.h>
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -634,7 +636,6 @@ CHECK_FIELD_OFFSET(ffi_closure, user_data, 4*3);
 // Most wasm runtimes support at most 1000 Js trampoline args.
 #define MAX_ARGS 1000
 
-
 #define VARARGS_FLAG 1
 
 #define FFI_OK_MACRO 0
@@ -643,6 +644,184 @@ _Static_assert(FFI_OK_MACRO == FFI_OK, "FFI_OK must be 0");
 #define FFI_BAD_TYPEDEF_MACRO 1
 _Static_assert(FFI_BAD_TYPEDEF_MACRO == FFI_BAD_TYPEDEF, "FFI_BAD_TYPEDEF must be 1");
 
+// Modifies the given ffi_type in place to make it easier to process later on.
+//
+// Structs with no fields are replaced with void
+// Structs with a single field are replaced with that field's type
+// Structs with multiple fields are left as is
+// Complex types are replaced with a struct containing two floating point numbers (real and imaginary parts)
+//
+// After this processing, there will be no complex numbers, and all structs will have more than one non-void element and will thus be passed indirectly as a pointer.
+static unsigned short replace_type(ffi_type *type) {
+  if (type->type == FFI_TYPE_COMPLEX) {
+    // Treat complex as a struct with two doubles
+    // _Complex types are represented in the ABI as a struct containing two corresponding floating-point fields, real and imaginary.
+    // TODO: This is totally wrong, as it only works for double complex types.
+    static ffi_type *ffi_type_complex_struct_elements[] = {&ffi_type_double, &ffi_type_double, 0};
+    type->type = FFI_TYPE_STRUCT;
+    type->size = sizeof(double) * 2;
+    type->alignment = _Alignof(double);
+    type->elements = ffi_type_complex_struct_elements;
+    return FFI_TYPE_STRUCT;
+  }
+
+  if (type->type == FFI_TYPE_STRUCT) {
+    // Treat zero size structs as void
+    if (type->size == 0) {
+      type->type = FFI_TYPE_VOID;
+      return FFI_TYPE_VOID;
+    }
+  
+    // Analyze if a struct has only one non-void element
+    unsigned short scalar_type = FFI_TYPE_VOID;
+    for (size_t i = 0; type->elements[i] != 0; i++) {
+      unsigned short element_type = replace_type(type->elements[i]);
+      if (element_type != FFI_TYPE_VOID) {
+        if (scalar_type == FFI_TYPE_VOID) {
+          scalar_type = element_type;
+        }
+        else if (scalar_type != element_type) {
+          // Multiple elements, return as unmodified struct
+          return type->type;
+        }
+      }
+    }
+  
+    // Treat structs with only one non-void element like that element
+    type->type = scalar_type;
+    return scalar_type;
+  }
+
+  // Not a complex or a struct, so no processing needed
+  return type->type;
+}
+
+// Get the size of the type in the WASM C ABI in bytes.
+static uint8_t type_size(ffi_type *type) {
+  switch (type->type) {
+  case FFI_TYPE_VOID:
+    return 0; // Ignored
+  case FFI_TYPE_INT:
+  case FFI_TYPE_UINT8:
+  case FFI_TYPE_SINT8:
+  case FFI_TYPE_UINT16:
+  case FFI_TYPE_SINT16:
+  case FFI_TYPE_UINT32:
+  case FFI_TYPE_SINT32:
+    return 4; // i32
+  case FFI_TYPE_FLOAT:
+    return 4; // f32
+  case FFI_TYPE_UINT64:
+  case FFI_TYPE_SINT64:
+    return 8; // i64
+  case FFI_TYPE_DOUBLE:
+    return 8; // f64
+  case FFI_TYPE_POINTER:
+  case FFI_TYPE_STRUCT:
+    return 4; // i32 (i64 on wasm64)
+  case FFI_TYPE_LONGDOUBLE:
+    return 16; // i64 i64
+  case FFI_TYPE_COMPLEX:
+    return 4; // i32 (i64 on wasm64), as this is a pointer to a struct
+  default:
+    fprintf(stderr, "Unknown type %d in get_type_size\n", type->type);
+    abort();
+  }
+};
+
+// Places the value as a type in the values array
+static void place_type(ffi_type *type, void *value, uint8_t **values) {
+  switch (type->type) {
+  case FFI_TYPE_VOID:
+    return;
+  case FFI_TYPE_UINT8:
+    *((UINT32 *)*values) = (UINT32)(*(UINT8 *)value);
+    *values += 4;
+    return;
+  case FFI_TYPE_SINT8:
+    *((SINT32 *)*values) = (SINT32)(*(SINT8 *)value);
+    *values += 4;
+    return;
+  case FFI_TYPE_UINT16:
+    *((UINT32 *)*values) = (UINT32)(*(UINT16 *)value);
+    *values += 4;
+    return;
+  case FFI_TYPE_SINT16:
+    *((SINT32 *)*values) = (SINT32)(*(SINT16 *)value);
+    *values += 4;
+    return;
+  case FFI_TYPE_UINT32:
+    *((UINT32 *)*values) = (UINT32)(*(UINT32 *)value);
+    *values += 4;
+    return;
+  case FFI_TYPE_INT:
+  case FFI_TYPE_SINT32:
+    *((SINT32 *)*values) = (SINT32)(*(SINT32 *)value);
+    *values += 4;
+    return;
+  case FFI_TYPE_FLOAT:
+    *((FLOAT32 *)*values) = (FLOAT32)(*(FLOAT32 *)value);
+    *values += 4;
+    return;
+  case FFI_TYPE_UINT64:
+    *((UINT64 *)*values) = (UINT64)(*(UINT64 *)value);
+    *values += 8;
+    return;
+  case FFI_TYPE_SINT64:
+    *((SINT64 *)*values) = (SINT64)(*(SINT64 *)value);
+    *values += 8;
+    return;
+  case FFI_TYPE_DOUBLE:
+    *((double *)*values) = (double)(*(double *)value);
+    *values += 8;
+    return;
+  case FFI_TYPE_POINTER:
+    *((UINT32 *)*values) = (UINT32)(*(UINT32 *)value);
+    *values += 4;
+    return;
+  case FFI_TYPE_STRUCT:
+  case FFI_TYPE_COMPLEX: // _Complex types are represented in the ABI as a struct containing two corresponding floating-point fields, real and imaginary.
+    // Pass indirectly by pointer
+    *((UINT32 *)*values) = (UINT32)(value);
+    *values += 4;
+    return;
+  case FFI_TYPE_LONGDOUBLE:
+    // If the return type is indirect, we need an extra parameter for the return value
+    *((long double *)*values) = (long double)(*(long double *)value);
+    *values += 16;
+    return;
+  }
+}
+
+// Determines whether the type is returned indirectly
+//
+// Indirect return means that a pointer to the return value is passed as the first argument of the function call.
+static bool return_indirect(ffi_type *rtype) {
+  switch (rtype->type) {
+  case FFI_TYPE_VOID: // Void can be treated as direct return, as it is ignored
+  case FFI_TYPE_INT:
+  case FFI_TYPE_FLOAT:
+  case FFI_TYPE_UINT8:
+  case FFI_TYPE_SINT8:
+  case FFI_TYPE_UINT16:
+  case FFI_TYPE_SINT16:
+  case FFI_TYPE_UINT32:
+  case FFI_TYPE_SINT32:
+  case FFI_TYPE_UINT64:
+  case FFI_TYPE_SINT64:
+  case FFI_TYPE_DOUBLE:
+  case FFI_TYPE_POINTER:
+    return false;
+  case FFI_TYPE_STRUCT:
+  case FFI_TYPE_COMPLEX:
+  case FFI_TYPE_LONGDOUBLE:
+    return true;
+  default:
+    fprintf(stderr, "Unknown return type %d in return_strategy\n", rtype->type);
+    abort();
+  }
+}
+
 ffi_status FFI_HIDDEN
 ffi_prep_cif_machdep(ffi_cif *cif)
 {
@@ -650,6 +829,12 @@ ffi_prep_cif_machdep(ffi_cif *cif)
   if (cif->abi != FFI_WASM32_EMSCRIPTEN)
     return FFI_BAD_ABI;
 #endif
+
+  // TODO: Don't execute this with emscripten
+  for (int i = 0; i < cif->nargs; i++) {
+    replace_type(cif->arg_types[i]);
+  }
+
   // This is called after ffi_prep_cif_machdep_var so we need to avoid
   // overwriting cif->nfixedargs.
   if (!(cif->flags & VARARGS_FLAG))
@@ -677,17 +862,77 @@ ffi_prep_cif_machdep_var(ffi_cif *cif, unsigned nfixedargs, unsigned ntotalargs)
 }
 
 void ffi_call(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue) {
+  if (cif->abi == FFI_WASM32_EMSCRIPTEN) {
 #ifdef __EMSCRIPTEN__
-  ffi_call_js(cif, fn, rvalue, avalue);
+    ffi_call_js(cif, fn, rvalue, avalue);
+    return;
+#else
+    fprintf(stderr, "ffi_call: emscripten ABI is only supported with emscripten\n");
+    abort();
 #endif
+  }
+
+  if (cif->abi != FFI_WASM32) {
+    fprintf(stderr, "ffi_call: unsupported ABI %d\n", cif->abi);
+    abort();
+  }
+  if (cif->nfixedargs != cif->nargs) {
+    fprintf(stderr, "ffi_call: varargs not supported in this implementation\n");
+    abort();
+  }
+
+  // Calculate the total size that we need to allocate for the arguments
+  size_t total_size = 0;
+
+  // TODO: cif->rtype can be a nullptr i think
+  bool indirect_return = return_indirect(cif->rtype);
+  if (indirect_return) {
+    // If the return type is indirect, we need an extra parameter for the return value
+    total_size += 4; // TODO: Add support for wasm64
+  }
+
+  // Calculate how much space we need for all arguments
+  for (int i = 0; i < cif->nargs; i++) {
+    total_size += type_size(cif->arg_types[i]);
+  }
+
+  // Allocate a buffer that is big enough to hold all arguments in the correct order and representation
+  //
+  // i32 and f32 values take 4 bytes, i64 and f64 take 8 bytes
+  //
+  // We dont need to store their types as the runtime already knows the
+  // signature of every function, so it can interpret the values correctly
+  uint8_t values[total_size];
+  uint8_t * current_value = values;
+
+  // Place the return value if needed
+  if (indirect_return) {
+    // If the return type is indirect, we need an extra parameter for the return value
+    *((void **)current_value) = rvalue;
+    current_value += 4; // TODO: Add support for wasm64
+  }
+
+  for (int i = 0; i < cif->nargs; i++) {
+    place_type(cif->arg_types[i], avalue[i], &current_value);
+  }
+
+  __wasi_errno_t err = __wasi_call_dynamic(
+      (uint32_t)fn,
+      values,
+      rvalue);
+  if (err != __WASI_ERRNO_SUCCESS) {
+    fprintf(stderr, "ffi_call: __wasi_call_dynamic failed with error %d\n", err);
+    abort();
+  }
 }
-
-
 
 void * __attribute__ ((visibility ("default")))
 ffi_closure_alloc(size_t size, void **code) {
 #ifdef __EMSCRIPTEN__
   return ffi_closure_alloc_js(size, code);
+#else
+  fprintf(stderr, "ffi_closure_alloc: not implemented\n");
+  abort();
 #endif
 }
 
@@ -695,6 +940,9 @@ void __attribute__ ((visibility ("default")))
 ffi_closure_free(void *closure) {
 #ifdef __EMSCRIPTEN__
   return ffi_closure_free_js(closure);
+#else
+  fprintf(stderr, "ffi_closure_free: not implemented\n");
+  abort();
 #endif
 }
 
@@ -708,5 +956,8 @@ ffi_status ffi_prep_closure_loc(ffi_closure *closure, ffi_cif *cif,
     return FFI_BAD_ABI;
   return ffi_prep_closure_loc_js(closure, cif, (void *)fun, user_data,
                                      codeloc);
+#else
+  fprintf(stderr, "ffi_prep_closure_loc: not implemented\n");
+  abort();
 #endif
 }
