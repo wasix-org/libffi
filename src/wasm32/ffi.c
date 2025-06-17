@@ -727,7 +727,7 @@ static void impl_call_dynamic(
     void *values,
     void *results
 ) {
-  __wasi_errno_t error = __wasi_call_dynamic((size_t)function, values, results);
+  __wasi_errno_t error = __wasi_call_dynamic((__wasi_function_pointer_t)function, values, results);
   if(error != __WASI_ERRNO_SUCCESS) {
     abort();
   }
@@ -743,9 +743,8 @@ static ffi_status impl_closure_prepare(
     void *user_data_ptr
 ) {
   __wasi_errno_t error = __wasi_closure_prepare(
-      (size_t)backing_function, (size_t)code, argument_types_ptr, argument_types_len,
-      result_types_ptr, result_types_len, user_data_ptr
-  );
+      (__wasi_function_pointer_t)backing_function, (__wasi_function_pointer_t)code, argument_types_ptr, argument_types_len,
+      result_types_ptr, result_types_len, user_data_ptr);
   if(error != __WASI_ERRNO_SUCCESS) {
     abort();
   }
@@ -753,14 +752,14 @@ static ffi_status impl_closure_prepare(
 }
 
 static void impl_closure_alloc(void **code) {
-  __wasi_errno_t error = __wasi_closure_allocate((__wasi_size_t *)code);
-  if(error != __WASI_ERRNO_SUCCESS) {
+  __wasi_errno_t error = __wasi_closure_allocate((__wasi_function_pointer_t *)code);
+  if (error != __WASI_ERRNO_SUCCESS) {
     abort();
   }
 }
 
 static void impl_free_closure(void *code) {
-  __wasi_errno_t error = __wasi_closure_free((size_t)code);
+  __wasi_errno_t error = __wasi_closure_free((__wasi_function_pointer_t)code);
   if(error != __WASI_ERRNO_SUCCESS) {
     abort();
   }
