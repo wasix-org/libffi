@@ -788,9 +788,7 @@ static unsigned short replace_type(ffi_type *type, bool in_results) {
   }
 
   if (type->type == FFI_TYPE_COMPLEX) {
-    // Treat complex as a struct with two doubles
     // _Complex types are represented in the ABI as a struct containing two corresponding floating-point fields, real and imaginary.
-    // TODO: This is totally wrong, as it only works for double complex types.
     static ffi_type *ffi_type_complex_float_struct_elements[] = {&ffi_type_float, &ffi_type_float, 0};
     static ffi_type *ffi_type_complex_double_struct_elements[] = {&ffi_type_double, &ffi_type_double, 0};
     static ffi_type *ffi_type_complex_longdouble_struct_elements[] = {&ffi_type_longdouble, &ffi_type_longdouble, 0};
@@ -811,9 +809,10 @@ static unsigned short replace_type(ffi_type *type, bool in_results) {
     type->type = FFI_TYPE_STRUCT;
     // The size of the struct should be exactly the real and imaginary parts combined
     FFI_ASSERT(type->size == complex_type->size * 2);
+    type->size = complex_type->size * 2;
     // The alignment of the struct should be the same as a single of the underlying type
     FFI_ASSERT(type->alignment == complex_type->alignment);
-    // TODO: This 
+    type->alignment = complex_type->alignment;
     return FFI_TYPE_STRUCT;
   }
 
@@ -822,7 +821,7 @@ static unsigned short replace_type(ffi_type *type, bool in_results) {
     static ffi_type *ffi_type_complex_struct_elements[] = {&ffi_type_sint64, &ffi_type_sint64, 0};
     type->type = FFI_TYPE_STRUCT;
     type->size = ffi_type_sint64.size * 2;
-    type->alignment = 16; // long double is 16 bytes aligned
+    type->alignment = 16; // long double is 16 byte aligned
     type->elements = ffi_type_complex_struct_elements;
     return FFI_TYPE_STRUCT;
   }
@@ -1010,7 +1009,6 @@ static void *take_value(ffi_type *type, uint8_t **values) {
     (*values) += 4;
     return result;
   case FFI_TYPE_LONGDOUBLE:
-    // TODO: Test if this behaviour is correct
     result = *values;
     (*values) += 16;
     return result;
