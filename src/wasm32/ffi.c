@@ -1146,27 +1146,19 @@ static void closure_backing_function(
   void* user_data = closure->user_data;
   void (*fun)(ffi_cif *, void *, void **, void *) = closure->fun;
 
-  bool indirect_return = return_indirect(cif->rtype);
-
   void* libffi_args[cif->nargs];
-  // void* result = wasm_results;
-  void* result = 0;
-
-  if (indirect_return) {
-    // If the return type is indirect, we have an extra parameter for the return value
-    result = wasm_arguments;
-    wasm_arguments += 4;
-  } else {
-    // If the return type is direct, we don't need to pass it as an argument
-    result = wasm_results;
-  }
+  void* libffi_result = wasm_results;
 
   uint8_t * libffi_args_ptr = (uint8_t *)wasm_arguments;
+  if (return_indirect(cif->rtype)) {
+    // If the return type is indirect, the first argument is a pointer to the result
+    libffi_result = take_value(cif->rtype, (uint8_t**)(&libffi_args_ptr));
+  }
   for (int i = 0; i < cif->nargs; i++) {
     libffi_args[i] = take_value(cif->arg_types[i], (uint8_t**)(&libffi_args_ptr));
   }
 
-  fun(cif, result, libffi_args, user_data);
+  fun(cif, libffi_result, libffi_args, user_data);
 
   return;
 }
