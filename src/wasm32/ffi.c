@@ -722,6 +722,16 @@ static ffi_status impl_closure_prepare(
 #include <wasi/api_wasi.h>
 #include <wasi/api_wasix.h>
 
+// Set the correct values for the FFI_WASM_TYPE_* defines
+#undef FFI_WASM_TYPE_I32
+#define FFI_WASM_TYPE_I32 __WASI_WASM_VALUE_TYPE_I32
+#undef FFI_WASM_TYPE_I64
+#define FFI_WASM_TYPE_I64 __WASI_WASM_VALUE_TYPE_I64
+#undef FFI_WASM_TYPE_F32
+#define FFI_WASM_TYPE_F32 __WASI_WASM_VALUE_TYPE_F32
+#undef FFI_WASM_TYPE_F64
+#define FFI_WASM_TYPE_F64 __WASI_WASM_VALUE_TYPE_F64
+
 static void impl_call_dynamic(
     void *function,
     void *values,
