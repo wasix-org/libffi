@@ -2,10 +2,6 @@
 
 set -exuo pipefail
 
-if [ -z "$WASIXCC_SYSROOT" ]; then
-  export WASIXCC_SYSROOT=$WASIX_SYSROOT
-fi
-
 export \
   CC=wasixcc \
   CXX=wasix++ \
@@ -13,7 +9,8 @@ export \
   NM=wasixnm \
   RANLIB=wasixranlib \
   WASIXCC_WASM_EXCEPTIONS=yes \
-  WASIXCC_PIC=yes
+  WASIXCC_PIC=yes \
+  WASIXCC_COMPILER_FLAGS="-D__wasix__"
 
 ./configure \
   --host=wasm32-wasmer-wasi \
