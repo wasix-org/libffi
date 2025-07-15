@@ -663,7 +663,9 @@ ffi_prep_closure_loc_js,
 static void impl_call_dynamic(
     void *function,
     void *values,
-    void *results
+    size_t values_len,
+    void *results,
+    size_t results_len
 );
 
 // Reserve a spot in the indirect function table for a closure
@@ -718,27 +720,30 @@ static ffi_status impl_closure_prepare(
 #define FFI_WASM_TYPE_F64 3
 
 // Implement the functions defined above using wasix syscalls.
-#ifdef __wasix__
-#include <wasi/api_wasi.h>
-#include <wasi/api_wasix.h>
+#if defined __has_include
+#if __has_include (<wasix/call_dynamic.h>) && __has_include (<wasix/closure.h>)
+#include <wasix/call_dynamic.h>
+#include <wasix/closure.h>
 
 // Set the correct values for the FFI_WASM_TYPE_* defines
 #undef FFI_WASM_TYPE_I32
-#define FFI_WASM_TYPE_I32 __WASI_WASM_VALUE_TYPE_I32
+#define FFI_WASM_TYPE_I32 WASIX_VALUE_TYPE_I32
 #undef FFI_WASM_TYPE_I64
-#define FFI_WASM_TYPE_I64 __WASI_WASM_VALUE_TYPE_I64
+#define FFI_WASM_TYPE_I64 WASIX_VALUE_TYPE_I64
 #undef FFI_WASM_TYPE_F32
-#define FFI_WASM_TYPE_F32 __WASI_WASM_VALUE_TYPE_F32
+#define FFI_WASM_TYPE_F32 WASIX_VALUE_TYPE_F32
 #undef FFI_WASM_TYPE_F64
-#define FFI_WASM_TYPE_F64 __WASI_WASM_VALUE_TYPE_F64
+#define FFI_WASM_TYPE_F64 WASIX_VALUE_TYPE_F64
 
 static void impl_call_dynamic(
     void *function,
     void *values,
-    void *results
+    size_t values_len,
+    void *results,
+    size_t results_len
 ) {
-  __wasi_errno_t error = __wasi_call_dynamic((__wasi_function_pointer_t)function, values, results);
-  if(error != __WASI_ERRNO_SUCCESS) {
+  int error = wasix_call_dynamic((wasix_function_pointer_t)function, values, values_len, results, results_len, false);
+  if(error != 0) {
     abort();
   }
 }
@@ -752,29 +757,30 @@ static ffi_status impl_closure_prepare(
     size_t result_types_len,
     void *user_data_ptr
 ) {
-  __wasi_errno_t error = __wasi_closure_prepare(
-      (__wasi_function_pointer_t)backing_function, (__wasi_function_pointer_t)code, argument_types_ptr, argument_types_len,
+  int error = wasix_closure_prepare(
+      (wasix_function_pointer_t)backing_function, (wasix_function_pointer_t)code, argument_types_ptr, argument_types_len,
       result_types_ptr, result_types_len, user_data_ptr);
-  if(error != __WASI_ERRNO_SUCCESS) {
+  if(error != 0) {
     abort();
   }
   return FFI_OK;
 }
 
 static void impl_closure_alloc(void **code) {
-  __wasi_errno_t error = __wasi_closure_allocate((__wasi_function_pointer_t *)code);
-  if (error != __WASI_ERRNO_SUCCESS) {
+  int error = wasix_closure_allocate((wasix_function_pointer_t *)code);
+  if (error != 0) {
     abort();
   }
 }
 
 static void impl_free_closure(void *code) {
-  __wasi_errno_t error = __wasi_closure_free((__wasi_function_pointer_t)code);
-  if(error != __WASI_ERRNO_SUCCESS) {
+  int error = wasix_closure_free((wasix_function_pointer_t)code);
+  if(error != 0) {
     abort();
   }
 }
 
+#endif
 #endif
 
 // Modifies the given ffi_type in place to make it easier to process later on.
@@ -1254,7 +1260,7 @@ void ffi_call(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue) {
     place_value(cif->arg_types[i], avalue[i], &current_value);
   }
 
-  impl_call_dynamic(fn, values, rvalue);
+  impl_call_dynamic(fn, values, total_size, rvalue, indirect_return ? 0 : type_size(cif->rtype));
 #endif
 }
 
