@@ -792,12 +792,13 @@ static void impl_free_closure(void *code) {
 // * Struct fields are recursively processed according to the same rules
 // * Only for results: long doubles are replaced with a struct containing two 64-bit integers
 //
-// ffi_type: is a pointer to the ffi_type to process. The type will be modified in place.
+// ffi_type: points to a pointer to the ffi_type to process. For struct types the ffi_type will be modified in place. For complex and long double types the pointer will be replaced with a new pointer to a different ffi_type.
 //
 // in_results: Set to true if the type a result, false if it is an argument.
 //
 // After this processing, there will be no complex numbers, and all structs will have more than one non-void element and will thus be passed indirectly as a pointer.
-static unsigned short replace_type(ffi_type *type, bool in_results) {
+static unsigned short replace_type(ffi_type **type_ptr, bool in_results) {
+  ffi_type *type = *type_ptr;
   if (type == NULL) {
     return FFI_TYPE_VOID; // No type, so no processing needed. Should only happen for return types.
   }
@@ -807,37 +808,56 @@ static unsigned short replace_type(ffi_type *type, bool in_results) {
     static ffi_type *ffi_type_complex_float_struct_elements[] = {&ffi_type_float, &ffi_type_float, 0};
     static ffi_type *ffi_type_complex_double_struct_elements[] = {&ffi_type_double, &ffi_type_double, 0};
     static ffi_type *ffi_type_complex_longdouble_struct_elements[] = {&ffi_type_longdouble, &ffi_type_longdouble, 0};
-    ffi_type* complex_type = type->elements[0];
-    switch (complex_type->type) {
+    static ffi_type ffi_type_complex_float_struct = {
+      .size = sizeof(float) * 2,
+      .alignment = _Alignof(float),
+      .type = FFI_TYPE_STRUCT,
+      .elements = ffi_type_complex_float_struct_elements,
+    };
+    static ffi_type ffi_type_complex_double_struct = {
+      .size = sizeof(double) * 2,
+      .alignment = _Alignof(double),
+      .type = FFI_TYPE_STRUCT,
+      .elements = ffi_type_complex_double_struct_elements,
+    };
+    static ffi_type ffi_type_complex_longdouble_struct = {
+      .size = sizeof(long double) * 2,
+      .alignment = _Alignof(long double),
+      .type = FFI_TYPE_STRUCT,
+      .elements = ffi_type_complex_longdouble_struct_elements,
+    };
+
+    ffi_type* underlying_type = type->elements[0];
+    switch (underlying_type->type) {
       case FFI_TYPE_FLOAT:
-        type->elements = ffi_type_complex_float_struct_elements;
+        *type_ptr = &ffi_type_complex_float_struct;
         break;
       case FFI_TYPE_DOUBLE:
-        type->elements = ffi_type_complex_double_struct_elements;
+        *type_ptr = &ffi_type_complex_double_struct;
         break;
       case FFI_TYPE_LONGDOUBLE:
-        type->elements = ffi_type_complex_longdouble_struct_elements;
+        *type_ptr = &ffi_type_complex_longdouble_struct;
         break;
       default:
         ABORT_WITH_MSG("Only float, double and long double complex types are supported");
     }
-    type->type = FFI_TYPE_STRUCT;
     // The size of the struct should be exactly the real and imaginary parts combined
-    FFI_ASSERT(type->size == complex_type->size * 2);
-    type->size = complex_type->size * 2;
+    FFI_ASSERT(type->size == underlying_type->size * 2);
     // The alignment of the struct should be the same as a single of the underlying type
-    FFI_ASSERT(type->alignment == complex_type->alignment);
-    type->alignment = complex_type->alignment;
+    FFI_ASSERT(type->alignment == underlying_type->alignment);
     return FFI_TYPE_STRUCT;
   }
 
   if (in_results && type->type == FFI_TYPE_LONGDOUBLE) {
     // When returning long doubles, they are treated as structs.
-    static ffi_type *ffi_type_complex_struct_elements[] = {&ffi_type_sint64, &ffi_type_sint64, 0};
-    type->type = FFI_TYPE_STRUCT;
-    type->size = ffi_type_sint64.size * 2;
-    type->alignment = 16; // long double is 16 byte aligned
-    type->elements = ffi_type_complex_struct_elements;
+    static ffi_type *ffi_type_longdouble_struct_elements[] = {&ffi_type_sint64, &ffi_type_sint64, 0};
+    static ffi_type ffi_type_longdouble_struct = {
+      .size = sizeof(SINT64) * 2,
+      .alignment = 16, // long double is 16 byte aligned
+      .type = FFI_TYPE_STRUCT,
+      .elements = ffi_type_longdouble_struct_elements
+    };
+    *type_ptr = &ffi_type_longdouble_struct;
     return FFI_TYPE_STRUCT;
   }
 
@@ -852,7 +872,7 @@ static unsigned short replace_type(ffi_type *type, bool in_results) {
     unsigned short scalar_type = FFI_TYPE_VOID;
     size_t number_of_nonvoid_elements = 0;
     for (size_t i = 0; type->elements[i] != 0; i++) {
-      unsigned short element_type = replace_type(type->elements[i], false);
+      unsigned short element_type = replace_type(&type->elements[i], false);
       if (element_type != FFI_TYPE_VOID) {
         scalar_type = element_type;
         number_of_nonvoid_elements += 1;
@@ -1198,9 +1218,9 @@ ffi_prep_cif_machdep(ffi_cif *cif)
 #else
   // Preprocess arguments and return types
   for (int i = 0; i < cif->nargs; i++) {
-    replace_type(cif->arg_types[i], false);
+    replace_type(&cif->arg_types[i], false);
   }
-  replace_type(cif->rtype, true);
+  replace_type(&cif->rtype, true);
 #endif
 
   // This is called after ffi_prep_cif_machdep_var so we need to avoid
