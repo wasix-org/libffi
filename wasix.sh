@@ -16,8 +16,9 @@ export \
   --host=wasm32-wasmer-wasi \
   --enable-static --disable-shared \
   --disable-dependency-tracking --disable-builddir --disable-multi-os-directory \
-  --disable-raw-api --disable-docs
+  --disable-raw-api --disable-docs \
+  --prefix=$(realpath ./dist)
 
 make clean
-
-make -j16
+make
+make install
